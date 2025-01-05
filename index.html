@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enhanced PDF Voice Reader</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            padding: 20px;
+            max-width: 1400px;
+            margin: 0 auto;
+            background-color: #f5f5f5;
+        }
+
+        .container {
+            display: grid;
+            grid-template-columns: 300px 1fr;
+            gap: 20px;
+        }
+
+        .sidebar {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            height: fit-content;
+        }
+
+        .main-content {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .upload-section {
+            text-align: center;
+            padding: 20px;
+            border: 2px dashed #ccc;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .file-list {
+            margin-top: 20px;
+        }
+
+        .file-item {
+            border: 1px solid #eee;
+            padding: 10px;
+            margin-bottom: 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            position: relative;
+        }
+
+        .file-item:hover {
+            background-color: #f8f9fa;
+        }
+
+        .file-item.active {
+            border-color: #007bff;
+            background-color: #f0f7ff;
+        }
+
+        .file-preview {
+            width: 100%;
+            height: 100px;
+            margin-bottom: 10px;
+            border: 1px solid #ddd;
+        }
+
+        .file-info {
+            font-size: 0.9em;
+            color: #666;
+        }
+
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        button {
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+
+        button:hover {
+            background-color: #0056b3;
+        }
+
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+
+        .delete-btn {
+            position: absolute;
+            top: 5px;
+            right: 5px;
+            background-color: #dc3545;
+            padding: 2px 6px;
+            font-size: 0.8em;
+        }
+
+        #pdf-viewer {
+            width: 100%;
+            height: 800px;
+            border: 1px solid #ccc;
+            margin-top: 20px;
+        }
+
+        .voice-settings {
+            margin: 20px 0;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+        }
+
+        select, input[type="number"] {
+            padding: 8px;
+            margin-right: 10px;
+            border-radius: 4px;
+            border: 1px solid #ccc;
+        }
+
+        .status {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 4px;
+        }
+
+        .resume-info {
+            font-size: 0.85em;
+            color: #28a745;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="sidebar">
+            <h2>My PDF Files</h2>
+            <div class="upload-section">
+                <input type="file" id="file-input" accept=".pdf" style="display: none;">
+                <button onclick="document.getElementById('file-input').click()">Upload PDF</button>
+                <p>Or drag and drop here</p>
+            </div>
+            <div id="file-list" class="file-list"></div>
+        </div>
+
+        <div class="main-content">
+            <h1>PDF Voice Reader</h1>
+            
+            <div class="voice-settings">
+                <label for="voice-select">Voice:</label>
+                <select id="voice-select"></select>
+                
+                <label for="rate">Speed:</label>
+                <input type="range" id="rate" min="0.5" max="2" step="0.1" value="1">
+                <span id="rate-value">1x</span>
+
+                <label for="page-jump">Jump to page:</label>
+                <input type="number" id="page-jump" min="1" value="1">
+            </div>
+
+            <div class="controls">
+                <button id="play-button" disabled>Play</button>
+                <button id="pause-button" disabled>Pause</button>
+                <button id="stop-button" disabled>Stop</button>
+                <button id="prev-page" disabled>Previous Page</button>
+                <button id="next-page" disabled>Next Page</button>
+            </div>
+
+            <div class="status" id="status"></div>
+            
+            <div id="pdf-viewer"></div>
+        </div>
+    </div>
+
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+
+        let pdfDoc = null;
+        let pageNum = 1;
+        let pageText = '';
+        let utterance = null;
+        let synthesis = window.speechSynthesis;
+        let isReading = false;
+        let currentFileId = null;
+        let storedFiles = [];
+
+        // Load stored files from localStorage
+        function loadStoredFiles() {
+            const stored = localStorage.getItem('pdfFiles');
+            if (stored) {
+                storedFiles = JSON.parse(stored);
+                renderFileList();
+            }
+        }
+
+        // Save files to localStorage
+        function saveFiles() {
+            localStorage.setItem('pdfFiles', JSON.stringify(storedFiles));
+        }
+
+        // Generate unique ID
+        function generateId() {
+            return Date.now().toString(36) + Math.random().toString(36).substr(2);
+        }
+
+        // Render file list
+        function renderFileList() {
+            const fileList = document.getElementById('file-list');
+            fileList.innerHTML = '';
+
+            storedFiles.forEach(file => {
+                const fileItem = document.createElement('div');
+                fileItem.className = `file-item ${file.id === currentFileId ? 'active' : ''}`;
+                
+                const canvas = document.createElement('canvas');
+                canvas.className = 'file-preview';
+                fileItem.appendChild(canvas);
+
+                // Generate preview
+                createPreview(file.data, canvas);
+
+                const fileInfo = document.createElement('div');
+                fileInfo.className = 'file-info';
+                fileInfo.innerHTML = `
+                    <strong>${file.name}</strong><br>
+                    Last page: ${file.lastPage || 1}
+                    ${file.lastPosition ? '<div class="resume-info">Resume available</div>' : ''}
+                `;
+                fileItem.appendChild(fileInfo);
+
+                const deleteBtn = document.createElement('button');
+                deleteBtn.className = 'delete-btn';
+                deleteBtn.textContent = '×';
+                deleteBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    deleteFile(file.id);
+                };
+                fileItem.appendChild(deleteBtn);
+
+                fileItem.onclick = () => loadFile(file.id);
+                fileList.appendChild(fileItem);
+            });
+        }
+
+        // Create PDF preview
+        async function createPreview(data, canvas) {
+            try {
+                const pdf = await pdfjsLib.getDocument(data).promise;
+                const page = await pdf.getPage(1);
+                const viewport = page.getViewport({ scale: 0.3 });
+                
+                canvas.width = viewport.width;
+                canvas.height = viewport.height;
+                
+                await page.render({
+                    canvasContext: canvas.getContext('2d'),
+                    viewport: viewport
+                }).promise;
+            } catch (error) {
+                console.error('Preview generation failed:', error);
+            }
+        }
+
+        // Initialize voice selection
+        function loadVoices() {
+            const voices = synthesis.getVoices();
+            const voiceSelect = document.getElementById('voice-select');
+            voiceSelect.innerHTML = '';
+            
+            voices.forEach((voice, i) => {
+                const option = document.createElement('option');
+                option.value = i;
+                option.textContent = `${voice.name} (${voice.lang})`;
+                voiceSelect.appendChild(option);
+            });
+        }
+
+        synthesis.onvoiceschanged = loadVoices;
+        loadVoices();
+
+        // Handle file upload
+        document.getElementById('file-input').addEventListener('change', async function(e) {
+            const file = e.target.files[0];
+            if (file.type !== 'application/pdf') {
+                alert('Please upload a PDF file');
+                return;
+            }
+            await addNewFile(file);
+        });
+
+        // Add new file to storage
+        async function addNewFile(file) {
+            const reader = new FileReader();
+            reader.onload = async function(e) {
+                const fileData = {
+                    id: generateId(),
+                    name: file.name,
+                    data: e.target.result,
+                    lastPage: 1,
+                    lastPosition: null,
+                    dateAdded: new Date().toISOString()
+                };
+                storedFiles.push(fileData);
+                saveFiles();
+                renderFileList();
+                await loadFile(fileData.id);
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        // Delete file
+        function deleteFile(id) {
+            if (confirm('Are you sure you want to delete this file?')) {
+                storedFiles = storedFiles.filter(file => file.id !== id);
+                saveFiles();
+                renderFileList();
+                if (currentFileId === id) {
+                    currentFileId = null;
+                    pdfDoc = null;
+                    document.getElementById('pdf-viewer').innerHTML = '';
+                    disableButtons();
+                }
+            }
+        }
+
+        // Load and render PDF
+        async function loadFile(id) {
+            const file = storedFiles.find(f => f.id === id);
+            if (!file) return;
+
+            currentFileId = id;
+            pdfDoc = await pdfjsLib.getDocument(file.data).promise;
+            
+            // Set page number from last position if available
+            pageNum = file.lastPage || 1;
+            document.getElementById('page-jump').max = pdfDoc.numPages;
+            
+            renderPage(pageNum);
+            enableButtons();
+            renderFileList();
+        }
+
+        async function renderPage(num) {
+            const page = await pdfDoc.getPage(num);
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            const viewport = page.getViewport({scale: 1.5});
+
+            canvas.height = viewport.height;
+            canvas.width = viewport.width;
+
+            await page.render({
+                canvasContext: ctx,
+                viewport: viewport
+            }).promise;
+            
+            const viewer = document.getElementById('pdf-viewer');
+            viewer.innerHTML = '';
+            viewer.appendChild(canvas);
+
+            // Extract text content
+            const textContent = await page.getTextContent();
+            pageText = textContent.items.map(item => item.str).join(' ');
+
+            // Update stored position
+            if (currentFileId) {
+                const fileIndex = storedFiles.findIndex(f => f.id === currentFileId);
+                if (fileIndex !== -1) {
+                    storedFiles[fileIndex].lastPage = num;
+                    saveFiles();
+                    renderFileList();
+                }
+            }
+        }
+
+        // Text-to-speech controls
+        document.getElementById('play-button').addEventListener('click', () => {
+            if (!isReading) {
+                const voices = synthesis.getVoices();
+                const selectedVoice = voices[document.getElementById('voice-select').value];
+                const rate = parseFloat(document.getElementById('rate').value);
+
+                utterance = new SpeechSynthesisUtterance(pageText);
+                utterance.voice = selectedVoice;
+                utterance.rate = rate;
+                
+                synthesis.speak(utterance);
+                isReading = true;
+                updateStatus('Reading...');
+            }
+        });
+
+        document.getElementById('pause-button').addEventListener('click', () => {
+            if (synthesis.speaking) {
+                if (synthesis.paused) {
+                    synthesis.resume();
+                    updateStatus('Reading...');
+                } else {
+                    synthesis.pause();
+                    updateStatus('Paused');
+                }
+            }
+        });
+
+        document.getElementById('stop-button').addEventListener('click', () => {
+            synthesis.cancel();
+            isReading = false;
+            updateStatus('Stopped');
+        });
+
+        // Page navigation
+        document.getElementById('prev-page').addEventListener('click', () => {
+            if (pageNum <= 1) return;
+            pageNum--;
+            renderPage(pageNum);
+            synthesis.cancel();
+            isReading = false;
+            updateStatus('');
+        });
+
+        document.getElementById('next-page').addEventListener('click', () => {
+            if (pageNum >= pdfDoc.numPages) return;
+            pageNum++;
+            renderPage(pageNum);
+            synthesis.cancel();
+            isReading = false;
+            updateStatus('');
+        });
+
+        // Page jump
+        document.getElementById('page-jump').addEventListener('change', (e) => {
+            const newPage = parseInt(e.target.value);
+            if (newPage >= 1 && newPage <= pdfDoc.numPages) {
+                pageNum = newPage;
+                renderPage(pageNum);
+                synthesis.cancel();
+                isReading = false;
+                updateStatus('');
+            }
+        });
+
+        // Speed control
+        document.getElementById('rate').addEventListener('input', function(e) {
+            document.getElementById('rate-value').textContent = `${e.target.value}x`;
+        });
+
+        function enableButtons() {
+            document.getElementById('play-button').disabled = false;
+            document.getElementById('pause-button').disabled = false;
+            document.getElementById('stop-button').disabled = false;
+            document.getElementById('prev-page').disabled = false;
+            document.getElementById('next-page').disabled = false;
+        }
+
+        function disableButtons() {
+            document.getElementById('play-button').disabled = true;
+            document.getElementById('pause-button').disabled = true;
+            document.getElementById('stop-button').disabled = true;
+            document.getElementById('prev-page').disabled = true;
+            document.getElementById('next-page').disabled = true;
+        }
+
+        function updateStatus(message) {
+            const statusElement = document.getElementById('status');
+            statusElement.textContent = message;
